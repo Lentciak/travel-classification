@@ -1,0 +1,32 @@
+---
+title: "Eksploracja danych"
+author: "Igor Nowiński"
+format: 
+  html:
+    code-fold: false
+    code-tools: true
+    code-summary: "Pokaż kod"
+    code-overflow: wrap
+    smooth-scroll: true
+    highlight-style: arrow
+    code-block-bg: true
+    code-block-border-left: "#31BAE9"
+    toc: true
+    toc-title: "Spis treści"
+language: 'polski.yml'
+editor: source
+echo: true
+warning: false
+message: false
+self-contained: true
+embed-resources: true
+editor_options: 
+  chunk_output_type: console
+---
+
+# Ćwiczenia
+
+projekt 19.03
+- jaki zbiór danych, źródło(link)
+- przedstawienie problemu, opisać wszystkie zmienne
+- wykresy, w miarę prosty opis
