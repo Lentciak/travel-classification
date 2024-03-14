@@ -1,0 +1,95 @@
+---
+title: "Projekt z eksploracji danych"
+author: "Igor Nowiński"
+format: 
+  html:
+    code-fold: false
+    code-tools: true
+    code-summary: "Pokaż kod"
+    code-overflow: wrap
+    smooth-scroll: true
+    highlight-style: arrow
+    code-block-bg: true
+    code-block-border-left: "#31BAE9"
+    toc: true
+    toc-title: "Spis treści"
+language: 'polski.yml'
+editor: source
+echo: true
+warning: false
+message: false
+self-contained: true
+embed-resources: true
+editor_options: 
+  chunk_output_type: console
+---
+
+projekt 19.03
+- jaki zbiór danych, źródło(link)
+- przedstawienie problemu, opisać wszystkie zmienne
+- wykresy, w miarę prosty opis
+
+id_android - it represents the device used to capture the instance;
+speed - it represents the average speed (Km/H)
+distance - it represent the total distance (Km)
+rating - it is an evaluation parameter. Evaluation the traffic is a way to verify the volunteers perception about the traffic during the travel, in other words, if volunteers move to  some place and face traffic jam, maybe they will evaluate 'bad'. (3- good, 2- normal, 1-bad).
+rating_bus - it is other evaluation parameter. (1 - The amount of people inside the bus is little, 2 - The bus is not crowded, 3- The bus is crowded.
+rating_weather - it is another evaluation parameter. ( 2- sunny, 1- raining).
+car_or_bus - (1 - car, 2-bus)
+linha - information about the bus that does the pathway
+
+## Opis zbioru danych
+
+
+
+
+
+```{r wczytanie danych i zamiana car_or_bus na 0-1}
+library(rio)
+library(tidyverse)
+df <- as.data.frame(import("go_track_tracks.csv"))
+```
+
+
+```{r usunięcie niepotrzebnych danych}
+df <- df %>%
+  select(-c("linha", "id", "id_android"))
+```
+
+```{r eval=F zamiana car_or_bus na wartości 0-1}
+df$car_or_bus <- ifelse(df$car_or_bus == 1, 0, 1) 
+df$car_or_bus <- factor(df$car_or_bus, levels = c(0,1))
+```
+
+```{r eval=F zamiana sunny na 0(dodanie do braków danych)}
+# dodaję braki danych do najpopularniejszej wartości
+df$rating_weather <- ifelse(df$rating_weather == 1, 0, df$rating_weather) 
+```
+
+```{r eval=F zamiana rainy na 1}
+df$rating_weather <- ifelse(df$rating_weather == 2, 1, df$rating_weather)
+```
+
+
+```{r eval=F zamiana rating_bus na skalę 0-2}
+df$rating_bus <- ifelse(df$rating_bus == 0, 2, df$rating_bus)
+df$rating_bus <- ifelse(df$rating_bus == 1, 0, df$rating_bus)
+df$rating_bus <- ifelse(df$rating_bus == 2, 1, df$rating_bus)
+df$rating_bus <- ifelse(df$rating_bus == 3, 2, df$rating_bus)
+```
+
+```{r eval=F zamiana rating na skalę 0-2}
+df$rating <- ifelse(df$rating == 1, 0, df$rating)
+df$rating <- ifelse(df$rating == 2, 1, df$rating)
+df$rating <- ifelse(df$rating == 3, 2, df$rating)
+```
+
+```{r eval=F factory}
+df[4:6] <- lapply(df[4:6], factor)
+```
+
+```{r eval=F pierwszy model regresji logistycznej}
+mdl <- glm(rating~., data = df, family = "binomial")
+summary(mdl)
+```
+
