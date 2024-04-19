@@ -1,0 +1,281 @@
+---
+title: "Projekt z eksploracji danych"
+author: "Igor Nowiński"
+format: 
+  html:
+    code-fold: false
+    code-tools: true
+    code-summary: "Pokaż kod"
+    code-overflow: wrap
+    smooth-scroll: true
+    highlight-style: arrow
+    code-block-bg: true
+    code-block-border-left: "#31BAE9"
+    toc: true
+    toc-title: "Spis treści"
+language: 'polski.yml'
+editor: source
+echo: false
+warning: false
+message: false
+self-contained: true
+embed-resources: true
+editor_options: 
+  chunk_output_type: console
+---
+
+# Cel badania
+
+Celem badania jest zbudowanie optymalnego modelu klasyfikacyjnego, którego zadaniem będzie analiza predyktorów. Model ten ma za zadanie określić...
+
+
+# Opis zbioru danych
+
+## Wprowadzenie
+
+Zbiór danych został zebrany na podstawie aplikacji Go!Track. Jest on dostępny na stronie [Uniwersytetu Kalifornijskiego w Irvine](https://archive.ics.uci.edu/dataset/354/gps+trajectories). Aplikacja pełniła rolę nawigatora GPS oraz służyła do szukania przewoźników. Dostępna ona była w sklepie [Google Play](https://web.archive.org/web/20170719115511/https://play.google.com/store/apps/details?id=com.go.router). Zbiór danych posiada 163 obserwacje i składa się z 10 zmiennych.
+
+![](go!track.png){fig-align="center" width="70%"}
+
+## Opis zmiennych
+
+`id_android` - numer identyfikacyjny urządzenia z którego pochodzą dane
+
+`speed` - średnia prędkość pojazdy w kilometrach na godzinę
+
+`distance` - dystans przejechany, liczony w kilometrach
+
+`time` - czas podróży, liczony w godzinach
+
+`rating` - zmienna nominalna, która przyjmuje 3 wartości. Jest to ogólna ocena przejazdu przez pasażera 
+1 - źle,
+2 - w porządku,
+3 - dobrze
+
+`rating_bus` - zmienna nominalna, określa poziom zatłoczenia w pojeździe
+1 - mało pasażerów, 
+2 - pojazd nie jest przepełniony, 
+3 - pojazd jest przepełniony
+
+`rating_weather` - określa, jaka była pogoda podczas podróży
+1 - deszczowo,
+2 - słonecznie 
+
+`car_or_bus` - czy pasażer podróżował samochodem, czy autobusem
+1 - samochód,
+2 - autobus 
+
+`linha` - informacja na temat pojazdu
+
+
+```{r wczytanie danych}
+#| label: tbl-pokazanie 
+#| tbl-cap: Przykładowe wartości zmiennych w zbiorze danych
+library(rio)
+library(tidyverse)
+library(gt)
+library(dplyr)
+df <- as.data.frame(import("go_track_tracks.csv"))
+head(df) %>% gt()
+```
+
+
+```{r Załadowanie motywów}
+theme_dark <- function() {
+  theme(panel.background = element_rect(fill = '#222222'),
+        plot.background = element_rect(fill = '#222222',
+                                       colour = "white"),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank(),
+        axis.text = element_text(colour = 'white'),
+        axis.title = element_text(colour = 'white'),
+        legend.title = element_blank(),
+        legend.background = element_rect(fill = 'gray'))
+}
+theme_light <- function() {
+  theme(panel.background = element_rect(fill = 'white'),
+        plot.background = element_rect(fill = 'white'),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank(),
+        panel.grid.major.y = element_line(color = "black"),
+        panel.grid.minor.y = element_line(color = "gray30"),
+        axis.text = element_text(colour = 'black'),
+        axis.title = element_text(colour = 'black'),
+        legend.title = element_blank(),
+        legend.background = element_rect(fill = 'gray'),
+        axis.title.x = element_text(size = 14,vjust = -0.9),
+        axis.title.y = element_text(size = 14, angle = 90, vjust = 1.5))
+}
+```
+
+
+
+
+
+## Czyszczenie danych
+
+Ponieważ zbiór danych zawiera identyfikatory, do przeprowadzenia analizy zdecydowałem się usunąć kolumny `id` i `id_android`. Dodatkowo usuwam również kolumnę `linha`, ponieważ jest typu *chr*. Zamieniam zmienne nominalne na typ *factor*.
+
+```{r}
+df <- df %>% select(-c(1,2,10))
+df$rating <- factor(df$rating)
+df$car_or_bus <- factor(df$car_or_bus)
+```
+
+Niestety zmienne `rating_bus` i `rating_weather` posiadają wiele wartości 0, co oznaczają braki danych. Zamieniam je na wartości *NA*.
+
+```{r}
+df$rating_bus <- ifelse(df$rating_bus == 0, NA, df$rating_bus)
+df$rating_bus <- ifelse(df$rating_bus == 1, 0, df$rating_bus)
+df$rating_bus <- ifelse(df$rating_bus == 2, 1, df$rating_bus)
+df$rating_bus <- ifelse(df$rating_bus == 3, 2, df$rating_bus)
+df$rating_weather <- ifelse(df$rating_weather == 0, NA, df$rating_weather)
+df$rating_weather <- ifelse(df$rating_weather == 1, 0, df$rating_weather)
+df$rating_weather <- ifelse(df$rating_weather == 2, 1, df$rating_weather)
+```
+
+```{r}
+df$rating_bus <- factor(df$rating_bus)
+df$rating_weather <- factor(df$rating_weather)
+```
+
+
+```{r}
+#| label: tbl-poczyszczeniu
+#| tbl-cap: Przykładowe wartości zmiennych w zbiorze danych po usunięciu kolumn id, id_android i linha i konwersji typu danych
+head(df) %>% gt()
+```
+
+
+Zmieniłem również numerację zmiennych `rating_bus` i `rating_weather`.
+
+W @tbl-liczebnosc możemy zauważyć, że obserwacji w których pojazd był zatłoczony jest tylko 3.
+
+```{r}
+#| layout-ncol: 3
+#| label: tbl-liczebnosc
+#| tbl-cap: Przedstawienie liczebności zmiennych jakościowych
+#| tbl-subcap: ["rating_bus", "rating_weather", "rating"]
+
+tabela_rating_bus <- as.data.frame(table(df$rating_bus))
+colnames(tabela_rating_bus) <- c("Poziom", "Liczebność")
+tabela_rating_bus %>% gt()
+
+tabela_rating_weather <- as.data.frame(table(df$rating_weather))
+colnames(tabela_rating_weather) <- c("Poziom", "Liczebność")
+tabela_rating_weather %>% gt()
+
+tabela_rating <- as.data.frame(table(df$rating))
+colnames(tabela_rating) <- c("Poziom", "Liczebność")
+tabela_rating %>% gt()
+```
+
+
+
+
+### Sprawdzenie braków danych
+
+```{r}
+#| label: tbl-sprawdzeniebrakow
+#| tbl-cap: Sprawdzenie występowania wartości NA w zbiorze danych
+braki <- as.data.frame(t(colSums(is.na(df))))
+braki %>% gt()
+```
+
+Zbiór danych posiada 116 niepełnych obserwacji.
+
+### Nadmiarowość
+
+Zmienną`speed` można obliczyć ze wzoru:
+
+$$
+speed[\frac{Km}{h}] = \frac{distance[Km]}{time[h]}
+$$
+Sprawdziłem czy ta zależność jest prawdziwa.
+
+```{r}
+table(df$speed == df$distance / df$time)
+```
+
+Okazuje się, że dla zdecydowanej większości obserwacji to równanie nie zachodzi. Zdecydowałem, że nie będę usuwał zmiennej `speed` ze zbioru danych.
+
+
+
+## Wizualizacja zbioru danych
+
+```{r}
+#| label: fig-czestoscdistance
+#| fig-cap: Rozkład częstotliwości występowania wartości zmiennej distance
+theme_set(theme_light())
+df %>%
+ggplot(aes(distance)) + geom_histogram(bins = 50) +
+  scale_x_continuous(breaks = c(1,2,3,4,5,10,20,30,40,50))
+```
+
+Możemy zauważyć, że większość przejazdów była na krótkie dystanse, poniżej 1 Km.
+
+```{r}
+#| label: fig-boxplotdistance
+#| fig-cap: Wykres ramka-wąsy zmiennej distance
+df %>%
+ggplot(aes(distance)) + geom_boxplot() +
+  theme(axis.text.y = element_blank())
+```
+
+Podejrzewam występowanie wartości odstających w tej zmiennej.
+
+# Budowa modelu klasyfikacyjnego
+
+```{r}
+library(tidymodels)
+library(yardstick)
+split <- initial_split(df[,c(-5,-6)])
+train <- training(split)
+test <- testing(split)
+```
+
+```{r}
+rec <- recipe(rating ~ ., data = train)
+```
+
+```{r}
+rf <- rand_forest(mode = "classification", mtry = 5, trees = 1000) %>% 
+  set_engine("ranger")
+```
+
+```{r}
+wflow <- workflow() %>% 
+  add_recipe(rec) %>% 
+  add_model(rf)
+```
+
+```{r}
+wflow_fit <- fit(wflow, data = train)
+```
+
+```{r}
+pred_test <- predict(wflow_fit, test)
+```
+
+```{r}
+pred_test %>%
+  bind_cols(test) %>%
+  metrics(truth=rating, estimate = .pred_class)
+```
+
+```{r}
+cm <- pred_test %>% 
+  bind_cols(test) %>%
+  conf_mat(truth = rating, estimate = .pred_class)
+```
+
+```{r}
+cm
+```
+
+```{r}
+summary(cm)
+```
+
+Model na "surowych" danych okazał się być bardzo słaby. Accuracy jest równe $0.488$, Sensitivity $0.347$, a Specifivity $0.694$.
+
