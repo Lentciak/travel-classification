@@ -35,7 +35,7 @@ Celem badania jest zbudowanie optymalnego modelu klasyfikacyjnego, którego zada
 
 Zbiór danych został zebrany na podstawie aplikacji Go!Track. Jest on dostępny na stronie [Uniwersytetu Kalifornijskiego w Irvine](https://archive.ics.uci.edu/dataset/354/gps+trajectories). Aplikacja pełniła rolę nawigatora GPS oraz służyła do szukania przewoźników. Dostępna ona była w sklepie [Google Play](https://web.archive.org/web/20170719115511/https://play.google.com/store/apps/details?id=com.go.router). Zbiór danych posiada 163 obserwacje i składa się z 10 zmiennych.
 
-![](go!track.png){fig-align="center" width="70%"}
+![](zdjęcia/go!track.png){fig-align="center" width="70%"}
 
 ## Opis zmiennych
 
@@ -75,7 +75,9 @@ library(rio)
 library(tidyverse)
 library(gt)
 library(dplyr)
-df <- as.data.frame(import("go_track_tracks.csv"))
+library(naniar)
+set.seed(2024)
+df <- as.data.frame(import("dane/go_track_tracks.csv"))
 head(df) %>% gt()
 ```
 
@@ -121,6 +123,22 @@ df <- df %>% select(-c(1,2,10))
 df$rating <- factor(df$rating)
 df$car_or_bus <- factor(df$car_or_bus)
 ```
+
+### Nadmiarowość
+
+Zmienną`speed` można obliczyć ze wzoru:
+
+$$
+speed[\frac{Km}{h}] = \frac{distance[Km]}{time[h]}
+$$
+
+Usunąłem zmienną `speed` ze zbioru danych.
+
+```{r}
+df <- df %>%
+  select(-speed)
+```
+
 
 Niestety zmienne `rating_bus` i `rating_weather` posiadają wiele wartości 0, co oznaczają braki danych. Zamieniam je na wartości *NA*.
 
@@ -170,9 +188,6 @@ colnames(tabela_rating) <- c("Poziom", "Liczebność")
 tabela_rating %>% gt()
 ```
 
-
-
-
 ### Sprawdzenie braków danych
 
 ```{r}
@@ -184,20 +199,63 @@ braki %>% gt()
 
 Zbiór danych posiada 116 niepełnych obserwacji.
 
-### Nadmiarowość
+Stanowi to `r  pct_miss(df$rating_weather)`% obserwacji.
 
-Zmienną`speed` można obliczyć ze wzoru:
-
-$$
-speed[\frac{Km}{h}] = \frac{distance[Km]}{time[h]}
-$$
-Sprawdziłem czy ta zależność jest prawdziwa.
+### Imputacja danych
 
 ```{r}
-table(df$speed == df$distance / df$time)
+library(mice)
+md.pattern(df)
+imputation <- mice(df, seed = 2024, printFlag=F, method = "rf")
+stripplot(imputation)
+indexes_missing_values <- which(is.na(df$rating_bus))
 ```
 
-Okazuje się, że dla zdecydowanej większości obserwacji to równanie nie zachodzi. Zdecydowałem, że nie będę usuwał zmiennej `speed` ze zbioru danych.
+```{r}
+imputation_1 <- complete(imputation, action = 1)
+imputation_2 <- complete(imputation, action = 2)
+imputation_3 <- complete(imputation, action = 3)
+imputation_4 <- complete(imputation, action = 4)
+imputation_5 <- complete(imputation, action = 5)
+```
+
+```{r}
+imputation_1_miss <- imputation_1[indexes_missing_values,]
+imputation_2_miss <- imputation_2[indexes_missing_values,]
+imputation_3_miss <- imputation_3[indexes_missing_values,]
+imputation_4_miss <- imputation_4[indexes_missing_values,]
+imputation_5_miss <- imputation_5[indexes_missing_values,]
+```
+
+
+```{r}
+ggplot() +
+  geom_bar(data = df,
+               aes(x = rating_bus, fill = "original"),
+               alpha = 0.5) +
+  geom_bar(data = imputation_2, 
+               aes(x=rating_bus, fill = "imputed"),
+               alpha = 0.5) +
+  scale_fill_manual(values = c("original" = 'blue',
+                               "imputed" = 'red'),
+                    name = "Legend")
+```
+
+```{r}
+ggplot() +
+  geom_bar(data = df,
+               aes(x = rating_weather, fill = "original"),
+               alpha = 0.5) +
+  geom_bar(data = imputation_2, 
+               aes(x=rating_weather, fill = "imputed"),
+               alpha = 0.5) +
+  scale_fill_manual(values = c("original" = 'blue',
+                               "imputed" = 'red'),
+                    name = "Legend")
+```
+
+nie wiem jak sprawdzić poprawność i jaki wybrać
+
 
 
 
@@ -214,68 +272,67 @@ ggplot(aes(distance)) + geom_histogram(bins = 50) +
 
 Możemy zauważyć, że większość przejazdów była na krótkie dystanse, poniżej 1 Km.
 
-```{r}
-#| label: fig-boxplotdistance
-#| fig-cap: Wykres ramka-wąsy zmiennej distance
-df %>%
-ggplot(aes(distance)) + geom_boxplot() +
-  theme(axis.text.y = element_blank())
-```
-
-Podejrzewam występowanie wartości odstających w tej zmiennej.
-
 # Budowa modelu klasyfikacyjnego
 
 ```{r}
 library(tidymodels)
 library(yardstick)
-split <- initial_split(df[,c(-5,-6)])
+set.seed(2024)
+```
+
+
+Model z usunięciem `rating_bus` i `rating_weather`
+
+```{r eval = FALSE}
+split <- initial_split(df[,c(-4,-5)])
 train <- training(split)
 test <- testing(split)
-```
-
-```{r}
 rec <- recipe(rating ~ ., data = train)
-```
-
-```{r}
-rf <- rand_forest(mode = "classification", mtry = 5, trees = 1000) %>% 
+rf <- rand_forest(mode = "classification", mtry = 3, trees = 1000) %>% 
   set_engine("ranger")
-```
-
-```{r}
 wflow <- workflow() %>% 
   add_recipe(rec) %>% 
   add_model(rf)
-```
-
-```{r}
 wflow_fit <- fit(wflow, data = train)
-```
-
-```{r}
 pred_test <- predict(wflow_fit, test)
-```
-
-```{r}
 pred_test %>%
   bind_cols(test) %>%
   metrics(truth=rating, estimate = .pred_class)
-```
-
-```{r}
 cm <- pred_test %>% 
   bind_cols(test) %>%
   conf_mat(truth = rating, estimate = .pred_class)
-```
-
-```{r}
-cm
-```
-
-```{r}
 summary(cm)
 ```
 
-Model na "surowych" danych okazał się być bardzo słaby. Accuracy jest równe $0.488$, Sensitivity $0.347$, a Specifivity $0.694$.
+Model na "surowych" danych okazał się być bardzo słaby. Accuracy jest równe , Sensitivity , a Specifivity .
+
+
+Model z imputacją danych
+
+
+```{r}
+split <- initial_split(imputation_2)
+train <- training(split)
+test <- testing(split)
+rec <- recipe(rating ~ ., data = train)
+
+rf <- rand_forest(mode = "classification", mtry = 5, trees = 100) %>% 
+  set_engine("ranger")
+
+wflow <- workflow() %>% 
+  add_recipe(rec) %>% 
+  add_model(rf)
+
+wflow_fit <- fit(wflow, data = train)
+
+pred_test <- predict(wflow_fit, test)
+
+cm <- pred_test %>% 
+  bind_cols(test) %>%
+  conf_mat(truth = rating, estimate = .pred_class)
+
+summary(cm)
+```
+
+
 
