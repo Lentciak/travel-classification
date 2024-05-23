@@ -31,13 +31,9 @@ Celem badania jest zbudowanie optymalnego modelu klasyfikacyjnego, którego zada
 
 # Opis zbioru danych
 
-## Wprowadzenie
-
 Zbiór danych został zebrany na podstawie aplikacji Go!Track. Jest on dostępny na stronie [Uniwersytetu Kalifornijskiego w Irvine](https://archive.ics.uci.edu/dataset/354/gps+trajectories). Aplikacja pełniła rolę nawigatora GPS oraz służyła do szukania przewoźników. Dostępna ona była w sklepie [Google Play](https://web.archive.org/web/20170719115511/https://play.google.com/store/apps/details?id=com.go.router). Zbiór danych posiada 163 obserwacje i składa się z 10 zmiennych.
 
 ![](zdjęcia/go!track.png){fig-align="center" width="70%"}
-
-## Opis zmiennych
 
 `id_android` - numer identyfikacyjny urządzenia z którego pochodzą dane
 
@@ -76,9 +72,20 @@ library(tidyverse)
 library(gt)
 library(dplyr)
 library(naniar)
+library(tidymodels)
+library(yardstick)
+library(bestNormalize)
+library(themis)
+library(caret)
+library(doParallel)
 set.seed(2024)
 df <- as.data.frame(import("dane/go_track_tracks.csv"))
 head(df) %>% gt()
+```
+
+```{r eval = FALSE}
+cl <- makePSOCKcluster(4)
+registerDoParallel(cl)
 ```
 
 
@@ -110,11 +117,7 @@ theme_light <- function() {
 }
 ```
 
-
-
-
-
-## Czyszczenie danych
+# Przygotowanie zbioru
 
 Ponieważ zbiór danych zawiera identyfikatory, do przeprowadzenia analizy zdecydowałem się usunąć kolumny `id` i `id_android`. Dodatkowo usuwam również kolumnę `linha`, ponieważ jest typu *chr*. Zamieniam zmienne nominalne na typ *factor*.
 
@@ -124,15 +127,13 @@ df$rating <- factor(df$rating)
 df$car_or_bus <- factor(df$car_or_bus)
 ```
 
-### Nadmiarowość
+### Nadmiarowość zmiennych
 
-Zmienną`speed` można obliczyć ze wzoru:
+Zmienną`speed` można obliczyć ze wzoru poniżej, dlatego zostaje usunięta ze zbioru.
 
 $$
 speed[\frac{Km}{h}] = \frac{distance[Km]}{time[h]}
 $$
-
-Usunąłem zmienną `speed` ze zbioru danych.
 
 ```{r}
 df <- df %>%
@@ -140,7 +141,7 @@ df <- df %>%
 ```
 
 
-Niestety zmienne `rating_bus` i `rating_weather` posiadają wiele wartości 0, co oznaczają braki danych. Zamieniam je na wartości *NA*.
+Niestety zmienne `rating_bus` i `rating_weather` posiadają wiele wartości 0, co oznaczają braki danych.
 
 ```{r}
 df$rating_bus <- ifelse(df$rating_bus == 0, NA, df$rating_bus)
@@ -150,29 +151,43 @@ df$rating_bus <- ifelse(df$rating_bus == 3, 2, df$rating_bus)
 df$rating_weather <- ifelse(df$rating_weather == 0, NA, df$rating_weather)
 df$rating_weather <- ifelse(df$rating_weather == 1, 0, df$rating_weather)
 df$rating_weather <- ifelse(df$rating_weather == 2, 1, df$rating_weather)
+df$rating <- ifelse(df$rating == 1, 0, df$rating)
+df$rating <- ifelse(df$rating == 2, 1, df$rating)
+df$rating <- ifelse(df$rating == 3, 2, df$rating)
 ```
 
 ```{r}
 df$rating_bus <- factor(df$rating_bus)
 df$rating_weather <- factor(df$rating_weather)
+df$rating <- factor(df$rating)
 ```
 
 
 ```{r}
 #| label: tbl-poczyszczeniu
-#| tbl-cap: Przykładowe wartości zmiennych w zbiorze danych po usunięciu kolumn id, id_android i linha i konwersji typu danych
+#| tbl-cap: Przykładowe wartości zmiennych w zbiorze danych po usunięciu kolumn id, id_android, linha i konwersji typu danych
 head(df) %>% gt()
 ```
 
 
-Zmieniłem również numerację zmiennych `rating_bus` i `rating_weather`.
+Numerację zmiennych `rating_bus` i `rating_weather` uległa zmianie.
+
+`rating_bus`
+0 - mało pasażerów, 
+1 - pojazd nie jest przepełniony, 
+2 - pojazd jest przepełniony
+
+`rating_weather`
+0 - deszczowo,
+1 - słonecznie 
+
 
 W @tbl-liczebnosc możemy zauważyć, że obserwacji w których pojazd był zatłoczony jest tylko 3.
 
 ```{r}
 #| layout-ncol: 3
 #| label: tbl-liczebnosc
-#| tbl-cap: Przedstawienie liczebności zmiennych jakościowych
+#| tbl-cap: Przedstawienie liczebności zmiennych nominalnych
 #| tbl-subcap: ["rating_bus", "rating_weather", "rating"]
 
 tabela_rating_bus <- as.data.frame(table(df$rating_bus))
@@ -197,142 +212,405 @@ braki <- as.data.frame(t(colSums(is.na(df))))
 braki %>% gt()
 ```
 
-Zbiór danych posiada 116 niepełnych obserwacji.
-
-Stanowi to `r  pct_miss(df$rating_weather)`% obserwacji.
+Stanowi to `r  round(pct_miss(df$rating_weather),2)`% obserwacji.
 
 ### Imputacja danych
 
+Ze względu na dużą ilość braków danych, zdecydowałem się imputować zmienne `rating_bus` i `rating_weather`. Użyłem do tego metody *rf*.
+
 ```{r}
 library(mice)
-md.pattern(df)
-imputation <- mice(df, seed = 2024, printFlag=F, method = "rf")
-stripplot(imputation)
+imputation_rf <- mice(df, seed = 2024, printFlag=F, method = "rf", m = 2)
 indexes_missing_values <- which(is.na(df$rating_bus))
 ```
 
+
 ```{r}
-imputation_1 <- complete(imputation, action = 1)
-imputation_2 <- complete(imputation, action = 2)
-imputation_3 <- complete(imputation, action = 3)
-imputation_4 <- complete(imputation, action = 4)
-imputation_5 <- complete(imputation, action = 5)
+#| layout-ncol: 2
+#| label: tbl-imp
+#| tbl-cap: Imputacja danych metodą rf
+#| tbl-subcap: ["rating_bus", "rating_weather"]
+
+head(imputation_rf$imp$rating_bus, 10) %>% gt()
+
+head(imputation_rf$imp$rating_weather,10) %>% gt()
 ```
 
 ```{r}
-imputation_1_miss <- imputation_1[indexes_missing_values,]
-imputation_2_miss <- imputation_2[indexes_missing_values,]
-imputation_3_miss <- imputation_3[indexes_missing_values,]
-imputation_4_miss <- imputation_4[indexes_missing_values,]
-imputation_5_miss <- imputation_5[indexes_missing_values,]
+imputation_1 <- complete(imputation_rf, action = 1)
+imputation_2 <- complete(imputation_rf, action = 2)
 ```
 
+
+## rating_bus
+::: {.panel-tabset}
+
+## imputacja 1
+
+```{r}
+theme_set(theme_light())
+ggplot() +
+  geom_bar(data = df,
+               aes(x = rating_bus, fill = "pierwotne"),
+               alpha = 0.5) +
+  geom_bar(data = imputation_1, 
+               aes(x=rating_bus, fill = "imputowane"),
+               alpha = 0.5) +
+  scale_fill_manual(values = c("pierwotne" = 'blue',
+                               "imputowane" = 'red'),
+                    name = "Legend")
+```
+
+## imputacja 2
+
+```{r}
+theme_set(theme_light())
+ggplot() +
+  geom_bar(data = df,
+               aes(x = rating_bus, fill = "pierwotne"),
+               alpha = 0.5) +
+  geom_bar(data = imputation_2, 
+               aes(x=rating_bus, fill = "imputowane"),
+               alpha = 0.5) +
+  scale_fill_manual(values = c("pierwotne" = 'blue',
+                               "imputowane" = 'red'),
+                    name = "Legend")
+```
+
+:::
+
+## rating_weather
+
+::: {.panel-tabset}
+
+## imputacja 1
 
 ```{r}
 ggplot() +
   geom_bar(data = df,
-               aes(x = rating_bus, fill = "original"),
+               aes(x = rating_weather, fill = "pierwotne"),
                alpha = 0.5) +
-  geom_bar(data = imputation_2, 
-               aes(x=rating_bus, fill = "imputed"),
+  geom_bar(data = imputation_1, 
+               aes(x=rating_weather, fill = "imputowane"),
                alpha = 0.5) +
-  scale_fill_manual(values = c("original" = 'blue',
-                               "imputed" = 'red'),
+  scale_fill_manual(values = c("pierwotne" = 'blue',
+                               "imputowane" = 'red'),
                     name = "Legend")
 ```
+
+## imputacja 2
 
 ```{r}
 ggplot() +
   geom_bar(data = df,
-               aes(x = rating_weather, fill = "original"),
+               aes(x = rating_weather, fill = "pierwotne"),
                alpha = 0.5) +
   geom_bar(data = imputation_2, 
-               aes(x=rating_weather, fill = "imputed"),
+               aes(x=rating_weather, fill = "imputowane"),
                alpha = 0.5) +
-  scale_fill_manual(values = c("original" = 'blue',
-                               "imputed" = 'red'),
+  scale_fill_manual(values = c("pierwotne" = 'blue',
+                               "imputowane" = 'red'),
                     name = "Legend")
 ```
 
-nie wiem jak sprawdzić poprawność i jaki wybrać
+:::
 
+na podstawie wariancji wybieram zbiór imputowany przez rf w wersji 1.
 
+```{r}
+imputation_completed <- imputation_2
+```
 
 
 ## Wizualizacja zbioru danych
 
+::: {.panel-tabset}
+
+## distance
+
 ```{r}
 #| label: fig-czestoscdistance
 #| fig-cap: Rozkład częstotliwości występowania wartości zmiennej distance
-theme_set(theme_light())
-df %>%
+imputation_completed %>%
 ggplot(aes(distance)) + geom_histogram(bins = 50) +
-  scale_x_continuous(breaks = c(1,2,3,4,5,10,20,30,40,50))
+  scale_x_continuous(breaks = c(1,2,3,4,5,10,20,30,40,50)) +
+  scale_y_continuous(breaks = c(10,20,30,40,50)) +
+  labs(x = "distance",
+       y = "częstość")
 ```
 
 Możemy zauważyć, że większość przejazdów była na krótkie dystanse, poniżej 1 Km.
 
-# Budowa modelu klasyfikacyjnego
+## time
 
 ```{r}
-library(tidymodels)
-library(yardstick)
-set.seed(2024)
+#| label: fig-czestoscdtime
+#| fig-cap: Rozkład częstotliwości występowania wartości zmiennej distance
+imputation_completed %>%
+ggplot(aes(time)) + geom_histogram(bins = 50) +
+  scale_x_continuous(breaks = c(0.1,0.2,0.3,0.4,0.5, 1, 1.5, 2)) +
+  scale_y_continuous(breaks = c(5,10,15,20,25,30)) +
+  labs(x = "time",
+       y = "częstość")
 ```
 
+Średnia czasu przejazdu wynosi `r round(mean(df$time),2)`, natomiast mediana `r round(median(df$time),2)`.
+
+:::
+
+# Budowa modelu klasyfikacyjnego
+
+
+```{r eval=FALSE}
+set.seed(2024)
+split_df <- initial_split(df[,c(-4,-5)])
+train_df <- training(split_df)
+test_df <- testing(split_df)
+train_df_upsampled <- upSample(x = train_df[,-3], 
+  y = train_df$rating, yname = 'rating') 
+```
+
+
+
+```{r eval=FALSE}
+set.seed(2024)
+split <- initial_split(imputation_completed)
+train <- training(split)
+test <- testing(split)
+  
+train_upsampled <- upSample(x = train[,-3], 
+  y = train$rating, yname = 'rating') 
+```
 
 Model z usunięciem `rating_bus` i `rating_weather`
 
-```{r eval = FALSE}
-split <- initial_split(df[,c(-4,-5)])
-train <- training(split)
-test <- testing(split)
-rec <- recipe(rating ~ ., data = train)
-rf <- rand_forest(mode = "classification", mtry = 3, trees = 1000) %>% 
+```{r eval=FALSE}
+set.seed(2024)
+rec <- recipe(rating ~ ., data = train_df_upsampled)
+rf <- rand_forest(mode = "classification", 
+                  mtry = tune(),
+                  min_n= tune(),
+                  trees = tune()) %>% 
   set_engine("ranger")
+  
+control_settings <- control_grid(save_pred = TRUE)
 wflow <- workflow() %>% 
   add_recipe(rec) %>% 
   add_model(rf)
-wflow_fit <- fit(wflow, data = train)
-pred_test <- predict(wflow_fit, test)
-pred_test %>%
-  bind_cols(test) %>%
-  metrics(truth=rating, estimate = .pred_class)
+
+param <- extract_parameter_set_dials(wflow)
+
+param <- param %>% update(mtry = mtry(c(1,3)))
+  
+grid <- grid_regular(param, levels = 5)
+
+metrics <- metric_set(bal_accuracy, accuracy)
+
+cv <- vfold_cv(train_df_upsampled, v = 10, repeats = 5)
+
+tuning <- tune_grid(
+  object = wflow,
+  grid = grid,
+  resamples = cv,
+  metrics = metrics,
+  control = control_settings)
+
+final_wflow <- finalize_workflow(wflow, show_best(tuning)[1,])  
+  
+wflow_fit <- fit(final_wflow, data = train_df_upsampled)
+  
+pred_test <- predict(wflow_fit, test_df)
+  
 cm <- pred_test %>% 
   bind_cols(test) %>%
   conf_mat(truth = rating, estimate = .pred_class)
-summary(cm)
 ```
+
+```{r eval=FALSE}
+saveRDS(cm, "rds/cm.rds")
+```
+
+```{r}
+cm <- readRDS("rds/cm.rds")
+summary(cm)
+cm
+```
+
 
 Model na "surowych" danych okazał się być bardzo słaby. Accuracy jest równe , Sensitivity , a Specifivity .
 
 
-Model z imputacją danych
+Model rf z imputacją danych
 
 
-```{r}
-split <- initial_split(imputation_2)
-train <- training(split)
-test <- testing(split)
-rec <- recipe(rating ~ ., data = train)
+```{r eval=FALSE}
+set.seed(2024)
+rec <- recipe(rating ~ ., data = train_upsampled)
 
-rf <- rand_forest(mode = "classification", mtry = 5, trees = 100) %>% 
+rf <- rand_forest(mode = "classification", 
+                  mtry = tune(),
+                  min_n= tune(),
+                  trees = tune()) %>% 
   set_engine("ranger")
 
+control_settings <- control_grid(save_pred = TRUE)
 wflow <- workflow() %>% 
   add_recipe(rec) %>% 
   add_model(rf)
 
-wflow_fit <- fit(wflow, data = train)
+param <- extract_parameter_set_dials(wflow)
+
+param <- param %>% update(mtry = mtry(c(1,5)))
+  
+grid <- grid_regular(param, levels = 5)
+
+cv <- vfold_cv(train_upsampled, v = 10, repeats = 5)
+  
+metrics <- metric_set(accuracy, bal_accuracy)
+  
+tuning <- tune_grid(
+  object = wflow,
+  grid = grid,
+  resamples = cv,
+  metrics = metrics,
+  control = control_settings)
+  
+final_wflow <- finalize_workflow(wflow, 
+  show_best(tuning, metric = 'accuracy')[1,])
+  
+wflow_fit <- fit(final_wflow, data = train_upsampled)
 
 pred_test <- predict(wflow_fit, test)
 
-cm <- pred_test %>% 
+cm_rf <- pred_test %>% 
   bind_cols(test) %>%
   conf_mat(truth = rating, estimate = .pred_class)
+```
 
-summary(cm)
+```{r eval=FALSE}
+saveRDS(cm_rf, "rds/cm_rf.rds")
+```
+
+```{r}
+cm_rf <- readRDS("rds/cm_rf.rds")
+cm_rf
+summary(cm_rf)
 ```
 
 
+boost
 
+```{r eval=FALSE}
+set.seed(2024)
+rec <- recipe(rating ~ ., data = train_upsampled) %>%
+  step_dummy(all_nominal(), -rating)
+
+  
+boost <- boost_tree(mode = "classification", 
+                  mtry = tune(),
+                  min_n= tune(),
+                  trees = tune(),
+                  learn_rate = tune(),
+                  loss_reduction = tune(),
+                  tree_depth = tune()) %>% 
+  set_engine("xgboost")
+
+control_settings <- control_grid(save_pred = TRUE)
+wflow <- workflow() %>% 
+  add_recipe(rec) %>% 
+  add_model(boost)
+
+param <- extract_parameter_set_dials(wflow)
+
+param <- param %>% update(mtry = mtry(c(1,5)))
+  
+grid <- grid_regular(param, levels = 2)
+
+cv <- vfold_cv(train_upsampled, v = 10, repeats = 5)
+  
+metrics <- metric_set(accuracy, bal_accuracy)
+tuning <- tune_grid(
+  object = wflow,
+  grid = grid,
+  resamples = cv,
+  metrics = metrics,
+  control = control_settings)
+
+final_wflow <- finalize_workflow(wflow, 
+  show_best(tuning, metric = 'accuracy')[1,])
+
+wflow_fit <- fit(final_wflow, data = train_upsampled)
+
+pred_test <- predict(wflow_fit, test)
+
+cm_boost <- pred_test %>% 
+  bind_cols(test) %>%
+  conf_mat(truth = rating, estimate = .pred_class)
+```
+
+```{r eval=FALSE}
+saveRDS(cm_boost, "rds/cm_boost.rds")
+```
+
+```{r}
+cm_boost <- readRDS("rds/cm_boost.rds")
+cm_boost
+summary(cm_boost)
+```
+
+svm
+
+```{r eval=FALSE}
+set.seed(2024)
+rec <- recipe(rating ~ ., data = train_upsampled)
+
+  
+svm <- svm_rbf(cost = tune(), rbf_sigma = tune()) %>%
+  set_engine("kernlab") %>%
+  set_mode("classification")
+
+control_settings <- control_grid(save_pred = TRUE)
+wflow <- workflow() %>% 
+  add_recipe(rec) %>% 
+  add_model(svm)
+
+param <- extract_parameter_set_dials(wflow)
+  
+grid <- grid_regular(param, levels = 6)
+
+cv <- vfold_cv(train_upsampled, v = 10, repeats = 5)
+  
+metrics <- metric_set(accuracy, bal_accuracy)
+  
+tuning <- tune_grid(
+  object = wflow,
+  grid = grid,
+  resamples = cv,
+  metrics = metrics,
+  control = control_settings)
+
+final_wflow <- finalize_workflow(wflow, 
+  show_best(tuning, metric = 'accuracy')[1,])
+
+wflow_fit <- fit(final_wflow, data = train_upsampled)
+
+pred_test <- predict(wflow_fit, test)
+
+cm_svm <- pred_test %>% 
+  bind_cols(test) %>%
+  conf_mat(truth = rating, estimate = .pred_class)
+```
+
+```{r eval=FALSE}
+saveRDS(cm_svm, "rds/cm_svm.rds")
+```
+
+```{r}
+cm_svm <- readRDS("rds/cm_svm.rds")
+cm_svm
+summary(cm_svm)
+```
+
+```{r eval = FALSE}
+stopCluster(cl)
+```
