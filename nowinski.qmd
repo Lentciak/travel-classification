@@ -1,12 +1,14 @@
 ---
-title: "Projekt z eksploracji danych"
+title: "Klasyfikacja ocen przejazdów"
+subtitle: "Projekt z Eksploracji Danych"
 author: "Igor Nowiński"
 format: 
   html:
-    code-fold: false
+    code-fold: true
     code-tools: true
     code-summary: "Pokaż kod"
     code-overflow: wrap
+    code-copy: true
     smooth-scroll: true
     highlight-style: arrow
     code-block-bg: true
@@ -15,7 +17,7 @@ format:
     toc-title: "Spis treści"
 language: 'polski.yml'
 editor: source
-echo: false
+echo: true
 warning: false
 message: false
 self-contained: true
@@ -26,7 +28,7 @@ editor_options:
 
 # Cel badania
 
-Celem badania jest zbudowanie optymalnego modelu klasyfikacyjnego, którego zadaniem będzie analiza predyktorów. Model ten ma za zadanie określić...
+Celem badania jest zbudowanie optymalnego modelu klasyfikacyjnego, którego zadaniem będzie klasyfikacja oceny końcowej. Dzięki temu będziemy mogli określić czy dany przejazd możemy uznać za wzorowy, dobry czy zły.
 
 
 # Opis zbioru danych
@@ -63,10 +65,7 @@ Zbiór danych został zebrany na podstawie aplikacji Go!Track. Jest on dostępny
 
 `linha` - informacja na temat pojazdu
 
-
-```{r wczytanie danych}
-#| label: tbl-pokazanie 
-#| tbl-cap: Przykładowe wartości zmiennych w zbiorze danych
+```{r wczytanie bibliotek i danych, echo=FALSE}
 library(rio)
 library(tidyverse)
 library(gt)
@@ -74,22 +73,29 @@ library(dplyr)
 library(naniar)
 library(tidymodels)
 library(yardstick)
-library(bestNormalize)
 library(themis)
 library(caret)
 library(doParallel)
 set.seed(2024)
 df <- as.data.frame(import("dane/go_track_tracks.csv"))
-head(df) %>% gt()
 ```
 
-```{r eval = FALSE}
+```{r przedstawienie danych wejściowych}
+#| label: tbl-pokazanie 
+#| tbl-cap: Przykładowe wartości zmiennych w zbiorze danych
+head(df) %>% 
+  mutate(speed = round(speed,2), 
+         time = round(time,2),
+         distance = round(distance, 2)) %>%
+  gt()
+```
+
+```{r parallel, eval = FALSE, echo=FALSE}
 cl <- makePSOCKcluster(4)
 registerDoParallel(cl)
 ```
 
-
-```{r Załadowanie motywów}
+```{r Załadowanie customowych motywów, echo=FALSE}
 theme_dark <- function() {
   theme(panel.background = element_rect(fill = '#222222'),
         plot.background = element_rect(fill = '#222222',
@@ -121,7 +127,7 @@ theme_light <- function() {
 
 Ponieważ zbiór danych zawiera identyfikatory, do przeprowadzenia analizy zdecydowałem się usunąć kolumny `id` i `id_android`. Dodatkowo usuwam również kolumnę `linha`, ponieważ jest typu *chr*. Zamieniam zmienne nominalne na typ *factor*.
 
-```{r}
+```{r usunięcie id, id_android i linha, echo=FALSE}
 df <- df %>% select(-c(1,2,10))
 df$rating <- factor(df$rating)
 df$car_or_bus <- factor(df$car_or_bus)
@@ -129,21 +135,20 @@ df$car_or_bus <- factor(df$car_or_bus)
 
 ### Nadmiarowość zmiennych
 
-Zmienną`speed` można obliczyć ze wzoru poniżej, dlatego zostaje usunięta ze zbioru.
+Zmienną`speed` można obliczyć ze wzoru poniżej, dlatego usuwam ją ze zbioru.
 
 $$
 speed[\frac{Km}{h}] = \frac{distance[Km]}{time[h]}
 $$
 
-```{r}
+```{r usunięcie speed, echo=FALSE}
 df <- df %>%
   select(-speed)
 ```
 
+Niestety zmienne `rating_bus` i `rating_weather` posiadają wiele wartości 0, co oznaczają braki danych. Zmieniłem poziomy *factor* tak, aby zaczynały się od zera. 
 
-Niestety zmienne `rating_bus` i `rating_weather` posiadają wiele wartości 0, co oznaczają braki danych.
-
-```{r}
+```{r releveling i zamiana na factor, echo=FALSE}
 df$rating_bus <- ifelse(df$rating_bus == 0, NA, df$rating_bus)
 df$rating_bus <- ifelse(df$rating_bus == 1, 0, df$rating_bus)
 df$rating_bus <- ifelse(df$rating_bus == 2, 1, df$rating_bus)
@@ -154,23 +159,24 @@ df$rating_weather <- ifelse(df$rating_weather == 2, 1, df$rating_weather)
 df$rating <- ifelse(df$rating == 1, 0, df$rating)
 df$rating <- ifelse(df$rating == 2, 1, df$rating)
 df$rating <- ifelse(df$rating == 3, 2, df$rating)
-```
-
-```{r}
+df$car_or_bus <- ifelse(df$car_or_bus == 1, 0, df$car_or_bus)
+df$car_or_bus <- ifelse(df$car_or_bus == 2, 1, df$car_or_bus)
 df$rating_bus <- factor(df$rating_bus)
 df$rating_weather <- factor(df$rating_weather)
 df$rating <- factor(df$rating)
+df$car_or_bus <- factor(df$car_or_bus)
 ```
 
-
-```{r}
+```{r na czysto}
 #| label: tbl-poczyszczeniu
 #| tbl-cap: Przykładowe wartości zmiennych w zbiorze danych po usunięciu kolumn id, id_android, linha i konwersji typu danych
-head(df) %>% gt()
+head(df) %>% 
+  mutate(time = round(time,2),
+         distance = round(distance,2)) %>%
+  gt()
 ```
 
-
-Numerację zmiennych `rating_bus` i `rating_weather` uległa zmianie.
+Nowe wartości zmiennych nominalnych:
 
 `rating_bus`
 0 - mało pasażerów, 
@@ -181,10 +187,14 @@ Numerację zmiennych `rating_bus` i `rating_weather` uległa zmianie.
 0 - deszczowo,
 1 - słonecznie 
 
+`car_or_bus`
+0 - samochód,
+1 - autobus 
 
-W @tbl-liczebnosc możemy zauważyć, że obserwacji w których pojazd był zatłoczony jest tylko 3.
 
-```{r}
+W @tbl-liczebnosc możemy zauważyć, że obserwacji w których pojazd był zatłoczony jest tylko 3. Zbiór nie jest zbalansowany, co może prowadzić do problemów przy uczeniu i sprawdzaniu modeli uczenia maszynowego.
+
+```{r Przedstawienie liczebności zmiennych nominalnych}
 #| layout-ncol: 3
 #| label: tbl-liczebnosc
 #| tbl-cap: Przedstawienie liczebności zmiennych nominalnych
@@ -205,27 +215,29 @@ tabela_rating %>% gt()
 
 ### Sprawdzenie braków danych
 
-```{r}
+```{r Sprawdzenie braków danych}
 #| label: tbl-sprawdzeniebrakow
 #| tbl-cap: Sprawdzenie występowania wartości NA w zbiorze danych
 braki <- as.data.frame(t(colSums(is.na(df))))
 braki %>% gt()
 ```
 
-Stanowi to `r  round(pct_miss(df$rating_weather),2)`% obserwacji.
+Stanowi to `r  round(pct_miss(df$rating_weather),2)`% obserwacji. Jest to bardzo dużo i logika podpowiada, że powinienem usunąć te dwie zmienne. Zdecydowałem natomiast o przeprowadzeniu imputacji danych, w celu zachowania obserwacji innych zmiennych. Wyniki będą porównane później.
 
 ### Imputacja danych
 
-Ze względu na dużą ilość braków danych, zdecydowałem się imputować zmienne `rating_bus` i `rating_weather`. Użyłem do tego metody *rf*.
+Ze względu na dużą ilość braków danych, zdecydowałem się imputować zmienne `rating_bus` i `rating_weather`. Użyłem do tego metody *rf* z biblioteki `mice`.
 
-```{r}
+```{r Imputacja, echo=FALSE}
 library(mice)
-imputation_rf <- mice(df, seed = 2024, printFlag=F, method = "rf", m = 2)
-indexes_missing_values <- which(is.na(df$rating_bus))
+imputation_rf <- mice(df, seed = 2024, 
+                      printFlag=F, 
+                      method = "rf", 
+                      m = 5,
+                      maxit = 10)
 ```
 
-
-```{r}
+```{r Przedstawienie jak zmienne zostały imputowane}
 #| layout-ncol: 2
 #| label: tbl-imp
 #| tbl-cap: Imputacja danych metodą rf
@@ -236,18 +248,27 @@ head(imputation_rf$imp$rating_bus, 10) %>% gt()
 head(imputation_rf$imp$rating_weather,10) %>% gt()
 ```
 
-```{r}
+```{r stworzenie pełnych zbiorów danych, echo=FALSE}
 imputation_1 <- complete(imputation_rf, action = 1)
 imputation_2 <- complete(imputation_rf, action = 2)
+imputation_3 <- complete(imputation_rf, action = 3)
+imputation_4 <- complete(imputation_rf, action = 4)
+imputation_5 <- complete(imputation_rf, action = 5)
+imputation_6 <- complete(imputation_rf, action = 6)
 ```
 
 
-## rating_bus
+#### Porównanie imputowanych zbiorów
+
+##### rating_bus
+
 ::: {.panel-tabset}
 
 ## imputacja 1
 
-```{r}
+```{r bus1}
+#| label: fig-bus1
+#| fig-cap: Rozkład obserwacji w klasach zmiennej rating_bus przy uzyciu 1 zbioru
 theme_set(theme_light())
 ggplot() +
   geom_bar(data = df,
@@ -258,12 +279,15 @@ ggplot() +
                alpha = 0.5) +
   scale_fill_manual(values = c("pierwotne" = 'blue',
                                "imputowane" = 'red'),
-                    name = "Legend")
+                    name = "Legend") +
+  labs(y = "Ilość")
 ```
 
 ## imputacja 2
 
-```{r}
+```{r bus2}
+#| label: fig-bus2
+#| fig-cap: Rozkład obserwacji w klasach zmiennej rating_bus przy użyciu 2 zbioru
 theme_set(theme_light())
 ggplot() +
   geom_bar(data = df,
@@ -274,18 +298,78 @@ ggplot() +
                alpha = 0.5) +
   scale_fill_manual(values = c("pierwotne" = 'blue',
                                "imputowane" = 'red'),
-                    name = "Legend")
+                    name = "Legend") +
+  labs(y = "Ilość")
+```
+
+## imputacja 3
+
+```{r bus3}
+#| label: fig-bus3
+#| fig-cap: Rozkład obserwacji w klasach zmiennej rating_bus przy użyciu 3 zbioru
+theme_set(theme_light())
+ggplot() +
+  geom_bar(data = df,
+               aes(x = rating_bus, fill = "pierwotne"),
+               alpha = 0.5) +
+  geom_bar(data = imputation_3, 
+               aes(x=rating_bus, fill = "imputowane"),
+               alpha = 0.5) +
+  scale_fill_manual(values = c("pierwotne" = 'blue',
+                               "imputowane" = 'red'),
+                    name = "Legend") +
+  labs(y = "Ilość")
+```
+
+## imputacja 4
+
+```{r bus4}
+#| label: fig-bus4
+#| fig-cap: Rozkład obserwacji w klasach zmiennej rating_bus przy użyciu 4 zbioru
+theme_set(theme_light())
+ggplot() +
+  geom_bar(data = df,
+               aes(x = rating_bus, fill = "pierwotne"),
+               alpha = 0.5) +
+  geom_bar(data = imputation_4, 
+               aes(x=rating_bus, fill = "imputowane"),
+               alpha = 0.5) +
+  scale_fill_manual(values = c("pierwotne" = 'blue',
+                               "imputowane" = 'red'),
+                    name = "Legend") +
+  labs(y = "Ilość")
+```
+
+## imputacja 5
+
+```{r bus5}
+#| label: fig-bus5
+#| fig-cap: Rozkład obserwacji w klasach zmiennej rating_bus przy użyciu 5 zbioru
+theme_set(theme_light())
+ggplot() +
+  geom_bar(data = df,
+               aes(x = rating_bus, fill = "pierwotne"),
+               alpha = 0.5) +
+  geom_bar(data = imputation_5, 
+               aes(x=rating_bus, fill = "imputowane"),
+               alpha = 0.5) +
+  scale_fill_manual(values = c("pierwotne" = 'blue',
+                               "imputowane" = 'red'),
+                    name = "Legend") +
+  labs(y = "Ilość")
 ```
 
 :::
 
-## rating_weather
+##### rating_weather
 
 ::: {.panel-tabset}
 
 ## imputacja 1
 
-```{r}
+```{r weather1}
+#| label: fig-weather1
+#| fig-cap: Rozkład obserwacji w klasach zmiennej rating_weather przy użyciu 1 zbioru
 ggplot() +
   geom_bar(data = df,
                aes(x = rating_weather, fill = "pierwotne"),
@@ -295,12 +379,16 @@ ggplot() +
                alpha = 0.5) +
   scale_fill_manual(values = c("pierwotne" = 'blue',
                                "imputowane" = 'red'),
-                    name = "Legend")
+                    name = "Legend") +
+  labs(y = "Ilość")
 ```
+
 
 ## imputacja 2
 
-```{r}
+```{r weather2}
+#| label: fig-weather2
+#| fig-cap: Rozkład obserwacji w klasach zmiennej rating_weather przy użyciu 2 zbioru
 ggplot() +
   geom_bar(data = df,
                aes(x = rating_weather, fill = "pierwotne"),
@@ -310,25 +398,95 @@ ggplot() +
                alpha = 0.5) +
   scale_fill_manual(values = c("pierwotne" = 'blue',
                                "imputowane" = 'red'),
-                    name = "Legend")
+                    name = "Legend") +
+  labs(y = "Ilość")
+```
+
+## imputacja 3
+
+```{r weather3}
+#| label: fig-weather3
+#| fig-cap: Rozkład obserwacji w klasach zmiennej rating_weather przy użyciu 3 zbioru
+ggplot() +
+  geom_bar(data = df,
+               aes(x = rating_weather, fill = "pierwotne"),
+               alpha = 0.5) +
+  geom_bar(data = imputation_3, 
+               aes(x=rating_weather, fill = "imputowane"),
+               alpha = 0.5) +
+  scale_fill_manual(values = c("pierwotne" = 'blue',
+                               "imputowane" = 'red'),
+                    name = "Legend") +
+  labs(y = "Ilość")
+```
+
+## imputacja 4
+
+```{r weather4}
+#| label: fig-weather4
+#| fig-cap: Rozkład obserwacji w klasach zmiennej rating_weather przy użyciu 4 zbioru
+ggplot() +
+  geom_bar(data = df,
+               aes(x = rating_weather, fill = "pierwotne"),
+               alpha = 0.5) +
+  geom_bar(data = imputation_4, 
+               aes(x=rating_weather, fill = "imputowane"),
+               alpha = 0.5) +
+  scale_fill_manual(values = c("pierwotne" = 'blue',
+                               "imputowane" = 'red'),
+                    name = "Legend") +
+  labs(y = "Ilość")
+```
+
+## imputacja 5
+
+```{r weather5}
+#| label: fig-weather5
+#| fig-cap: Rozkład obserwacji w klasach zmiennej rating_weather przy użyciu 5 zbioru
+ggplot() +
+  geom_bar(data = df,
+               aes(x = rating_weather, fill = "pierwotne"),
+               alpha = 0.5) +
+  geom_bar(data = imputation_5, 
+               aes(x=rating_weather, fill = "imputowane"),
+               alpha = 0.5) +
+  scale_fill_manual(values = c("pierwotne" = 'blue',
+                               "imputowane" = 'red'),
+                    name = "Legend") +
+  labs(y = "Ilość")
 ```
 
 :::
 
-na podstawie wariancji wybieram zbiór imputowany przez rf w wersji 1.
+```{r zapisanie wariancji imputacji, echo=FALSE}
+wariancje <- as.data.frame(imputation_rf$chainVar[,10,][c(4,5),])
+colnames(wariancje) <- c("Zbiór 1", "Zbiór 2", "Zbiór 3",
+                         "Zbiór 4", "Zbiór 5")  
+```
 
-```{r}
-imputation_completed <- imputation_2
+```{r wyświetlenie wyników imputacji}
+#| label: tbl-wynikiimp
+#| tbl-cap: Wariancja imputacji rating_bus i rating_weather
+as.data.frame(t(wariancje)) %>%
+  mutate(rating_bus = round(rating_bus,2),
+         rating_weather = round(rating_weather,2)) %>%
+  gt(rownames_to_stub = T)
+```
+
+Na podstawie wyników zamieszczonych w @tbl-wynikiimp wybieram zbiór imputowany przez *rf* w wersji 3.
+
+```{r wybranie zbioru do dalszej analizy, echo=FALSE}
+imputation_completed <- imputation_3
 ```
 
 
-## Wizualizacja zbioru danych
+# Wizualizacja zbioru danych
 
 ::: {.panel-tabset}
 
 ## distance
 
-```{r}
+```{r histogram distance}
 #| label: fig-czestoscdistance
 #| fig-cap: Rozkład częstotliwości występowania wartości zmiennej distance
 imputation_completed %>%
@@ -336,14 +494,14 @@ ggplot(aes(distance)) + geom_histogram(bins = 50) +
   scale_x_continuous(breaks = c(1,2,3,4,5,10,20,30,40,50)) +
   scale_y_continuous(breaks = c(10,20,30,40,50)) +
   labs(x = "distance",
-       y = "częstość")
+       y = "Częstość")
 ```
 
-Możemy zauważyć, że większość przejazdów była na krótkie dystanse, poniżej 1 Km.
+Średni pokonany dystans wynosi `r round(mean(imputation_completed$distance),2)` Km, natomiast mediana `r round(median(imputation_completed$distance),2)` Km.
 
 ## time
 
-```{r}
+```{r histogram time}
 #| label: fig-czestoscdtime
 #| fig-cap: Rozkład częstotliwości występowania wartości zmiennej distance
 imputation_completed %>%
@@ -351,30 +509,78 @@ ggplot(aes(time)) + geom_histogram(bins = 50) +
   scale_x_continuous(breaks = c(0.1,0.2,0.3,0.4,0.5, 1, 1.5, 2)) +
   scale_y_continuous(breaks = c(5,10,15,20,25,30)) +
   labs(x = "time",
-       y = "częstość")
+       y = "Częstość")
 ```
 
-Średnia czasu przejazdu wynosi `r round(mean(df$time),2)`, natomiast mediana `r round(median(df$time),2)`.
+Średnia czasu przejazdu wynosi `r round(mean(imputation_completed$time),2)` h, natomiast mediana `r round(median(imputation_completed$time),2)` h.
 
 :::
 
-# Budowa modelu klasyfikacyjnego
+```{r korelacja pomiędzy distance i time, echo=FALSE}
+cor_dis_time <- cor(imputation_completed$distance, 
+                    imputation_completed$time)
+```
+
+Korelacja pomiędzy `distance` i `time` jest równa `r round(cor_dis_time,2)`. Jest to zrozumiałe, ponieważ w sytuacji długiego dystansu do pokonania również rośnie potrzebny czas.
+
+## Sprawdzenie zależności pomiędzy zmiennymi nominalnymi
+
+::: {.panel-tabset}
+
+## car_or_bus vs rating_bus
+
+```{r chisq_bus}
+chisq.test(imputation_completed$car_or_bus, imputation_completed$rating_bus)
+```
+
+```{r fisher_bus}
+fisher.test(imputation_completed$car_or_bus, imputation_completed$rating_bus)
+```
+
+Na podstawie testu $\chi^2$ i Fishera nie mam powodów do odrzucenia $H_0$ o braku zależności pomiędzy `car_or_bus` i `rating_bus`.
+
+Oceny pojazdów nie są zależne od wyboru samochodu lub autokaru.
+
+## car_or_bus vs rating_weather
+
+```{r chisq_bus2}
+chisq.test(imputation_completed$car_or_bus, imputation_completed$rating_weather)
+```
+
+```{r fisher_bus2}
+fisher.test(imputation_completed$car_or_bus, imputation_completed$rating_weather)
+```
+
+Na podstawie testu $\chi^2$ i Fishera nie mam powodów do odrzucenia $H_0$ o braku zależności pomiędzy `car_or_bus` i `rating_weather`.
+
+Wybór typu pojazdu nie jest zależny od pogody.
+
+:::
 
 
-```{r eval=FALSE}
+# Budowa modeli klasyfikacyjnych
+
+Dzielę zbiór na część treningową i testową. Dodatkowo zastosowałem upsampling, aby zbalansować zbiór.
+
+Użyłem siatek regularnych do wybrania optymalnych parametrów modeli.
+
+Do walidacji dopasowania wybrałem walidację krzyżową.
+
+```{r Podział oryginalnego zbioru, eval=FALSE}
+#| code-summary: Podział oryginalnego zbioru danych
 set.seed(2024)
 split_df <- initial_split(df[,c(-4,-5)])
 train_df <- training(split_df)
 test_df <- testing(split_df)
+  
 train_df_upsampled <- upSample(x = train_df[,-3], 
   y = train_df$rating, yname = 'rating') 
 ```
 
-
-
-```{r eval=FALSE}
+```{r podział zbioru z imputacji, eval=FALSE}
+#| code-summary: Podział imputowanego zbioru danych
 set.seed(2024)
-split <- initial_split(imputation_completed)
+split <- initial_split(imputation_completed, prop = .7)
 train <- training(split)
 test <- testing(split)
   
@@ -382,9 +588,13 @@ train_upsampled <- upSample(x = train[,-3],
   y = train$rating, yname = 'rating') 
 ```
 
-Model z usunięciem `rating_bus` i `rating_weather`
+### Deklaracje, uczenie oraz sprawdzenie modeli
+::: {.panel-tabset}
 
-```{r eval=FALSE}
+## Las losowy z usunięciem zmiennych
+
+```{r Las na surowych danych, eval=FALSE}
+#| code-fold: show
 set.seed(2024)
 rec <- recipe(rating ~ ., data = train_df_upsampled)
 rf <- rand_forest(mode = "classification", 
@@ -422,28 +632,26 @@ wflow_fit <- fit(final_wflow, data = train_df_upsampled)
 pred_test <- predict(wflow_fit, test_df)
   
 cm <- pred_test %>% 
-  bind_cols(test) %>%
+  bind_cols(test_df) %>%
   conf_mat(truth = rating, estimate = .pred_class)
 ```
 
-```{r eval=FALSE}
+```{r zapis cm surowego rf, eval=FALSE, echo=FALSE}
 saveRDS(cm, "rds/cm.rds")
 ```
 
-```{r}
+```{r wczytanie cm surowego rf, echo=FALSE}
 cm <- readRDS("rds/cm.rds")
-summary(cm)
-cm
 ```
 
+```{r cm surowego rf, echo=FALSE}
+sum_cm <- summary(cm)[c(1,2,3,4,9),] %>% select(.metric, .estimate)
+```
 
-Model na "surowych" danych okazał się być bardzo słaby. Accuracy jest równe , Sensitivity , a Specifivity .
+## Las losowy
 
-
-Model rf z imputacją danych
-
-
-```{r eval=FALSE}
+```{r Las na zbiorze z imputacji, eval=FALSE}
+#| code-fold: show
 set.seed(2024)
 rec <- recipe(rating ~ ., data = train_upsampled)
 
@@ -487,24 +695,25 @@ cm_rf <- pred_test %>%
   conf_mat(truth = rating, estimate = .pred_class)
 ```
 
-```{r eval=FALSE}
+```{r zapis cm rf z imputacją, eval=FALSE, echo=FALSE}
 saveRDS(cm_rf, "rds/cm_rf.rds")
 ```
 
-```{r}
+```{r wczytanie cm rf z imputacją, echo=FALSE}
 cm_rf <- readRDS("rds/cm_rf.rds")
-cm_rf
-summary(cm_rf)
 ```
 
+```{r cm rf z imputacją, echo=FALSE}
+sum_cm_rf <- summary(cm_rf)[c(1,2,3,4,9),] %>% select(.metric, .estimate)
+```
 
-boost
+## XGBoost
 
-```{r eval=FALSE}
+```{r boosting, eval=FALSE}
+#| code-fold: show
 set.seed(2024)
 rec <- recipe(rating ~ ., data = train_upsampled) %>%
   step_dummy(all_nominal(), -rating)
-
   
 boost <- boost_tree(mode = "classification", 
                   mtry = tune(),
@@ -548,22 +757,24 @@ cm_boost <- pred_test %>%
   conf_mat(truth = rating, estimate = .pred_class)
 ```
 
-```{r eval=FALSE}
+```{r zapis cm boosting, eval=FALSE, echo=FALSE}
 saveRDS(cm_boost, "rds/cm_boost.rds")
 ```
 
-```{r}
+```{r wczytanie cm boosting, echo=FALSE}
 cm_boost <- readRDS("rds/cm_boost.rds")
-cm_boost
-summary(cm_boost)
 ```
 
-svm
+```{r cm boosting, echo=FALSE}
+sum_cm_boost <- summary(cm_boost)[c(1,2,3,4,9),] %>% select(.metric, .estimate)
+```
 
-```{r eval=FALSE}
+## SVM
+
+```{r svm, eval=FALSE}
+#| code-fold: show
 set.seed(2024)
 rec <- recipe(rating ~ ., data = train_upsampled)
-
   
 svm <- svm_rbf(cost = tune(), rbf_sigma = tune()) %>%
   set_engine("kernlab") %>%
@@ -601,16 +812,150 @@ cm_svm <- pred_test %>%
   conf_mat(truth = rating, estimate = .pred_class)
 ```
 
-```{r eval=FALSE}
+```{r zapis cm svm, eval=FALSE, echo=FALSE}
 saveRDS(cm_svm, "rds/cm_svm.rds")
 ```
 
-```{r}
+```{r wczytanie cm svm, echo=FALSE}
 cm_svm <- readRDS("rds/cm_svm.rds")
-cm_svm
-summary(cm_svm)
 ```
 
-```{r eval = FALSE}
+```{r cm svm, echo=FALSE}
+sum_cm_svm <- summary(cm_svm)[c(1,2,3,4,9),] %>% select(.metric, .estimate)
+```
+
+:::
+
+```{r zatrzymanie parallela, eval = FALSE, echo=FALSE}
 stopCluster(cl)
 ```
+
+# Podsumowanie i wnioski
+
+Po dopasowaniu modeli do zbioru treningowego oraz sprawdzeniu ich na zbiorze testowym uzyskałem wyniki, które przedstawiłem poniżej.
+
+
+### Macierze konfuzji
+
+
+::: {.panel-tabset}
+
+## Las losowy z usunięciem zmiennych
+
+```{r cmplot}
+#| label: fig-cm
+#| fig-cap: Macierz konfuzji lasu losowego na oryginalnym zbiorze danych
+DataFrame_cm <- as.data.frame(cm$table)
+names(DataFrame_cm) <- c("Truth", "Prediction", "Częstotliwość")
+
+# Visualization
+ggplot(DataFrame_cm, aes(x = Truth, y = Prediction, fill = Częstotliwość)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = Częstotliwość), vjust = 1.5, color = "white", size = 5) + 
+  scale_fill_gradient(low = "lightblue", high = "blue") +  
+  labs(title = "Macierz konfuzji", x = "Obserwowane",
+       y = "Prawdziwe") +
+  theme_minimal() +
+  theme(axis.text = element_text(size = 12),
+        axis.title = element_text(size = 14),
+        plot.title = element_text(hjust = 0.5))
+```
+
+## Las losowy
+
+```{r cm_rfplot}
+#| label: fig-cm_rf
+#| fig-cap: Macierz konfuzji lasu losowego na imputowanym zbiorze danych
+DataFrame_cm <- as.data.frame(cm_rf$table)
+names(DataFrame_cm) <- c("Truth", "Prediction", "Częstotliwość")
+
+# Visualization
+ggplot(DataFrame_cm, aes(x = Truth, y = Prediction, fill = Częstotliwość)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = Częstotliwość), vjust = 1.5, color = "white", size = 5) + 
+  scale_fill_gradient(low = "lightblue", high = "blue") +  
+  labs(title = "Macierz konfuzji", x = "Obserwowane",
+       y = "Prawdziwe") +
+  theme_minimal() +
+  theme(axis.text = element_text(size = 12),
+        axis.title = element_text(size = 14),
+        plot.title = element_text(hjust = 0.5))
+```
+
+## XGBoost
+
+```{r cmboostplot}
+#| label: fig-boost
+#| fig-cap: Macierz konfuzji boostingu
+DataFrame_cm <- as.data.frame(cm_boost$table)
+names(DataFrame_cm) <- c("Truth", "Prediction", "Częstotliwość")
+
+# Visualization
+ggplot(DataFrame_cm, aes(x = Truth, y = Prediction, fill = Częstotliwość)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = Częstotliwość), vjust = 1.5, color = "white", size = 5) + 
+  scale_fill_gradient(low = "lightblue", high = "blue") +  
+  labs(title = "Macierz konfuzji", x = "Obserwowane",
+       y = "Prawdziwe") +
+  theme_minimal() +
+  theme(axis.text = element_text(size = 12),
+        axis.title = element_text(size = 14),
+        plot.title = element_text(hjust = 0.5))
+```
+
+## SVM
+
+```{r cmsvmplot}
+#| label: fig-svm
+#| fig-cap: Macierz konfuzji SVM
+DataFrame_cm <- as.data.frame(cm_svm$table)
+names(DataFrame_cm) <- c("Truth", "Prediction", "Częstotliwość")
+
+# Visualization
+ggplot(DataFrame_cm, aes(x = Truth, y = Prediction, fill = Częstotliwość)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = Częstotliwość), vjust = 1.5, color = "white", size = 5) + 
+  scale_fill_gradient(low = "lightblue", high = "blue") +  
+  labs(title = "Macierz konfuzji", x = "Obserwowane",
+       y = "Prawdziwe") +
+  theme_minimal() +
+  theme(axis.text = element_text(size = 12),
+        axis.title = element_text(size = 14),
+        plot.title = element_text(hjust = 0.5))
+```
+
+:::
+
+
+### Metryki wyników na zbiorze testowym
+
+```{r tabela wyników}
+#| label: tbl-wyniki
+#| tbl-cap: Metryki modeli na zbiorze testowym
+wyniki_test <- cbind(sum_cm$.estimate, sum_cm_rf$.estimate, sum_cm_boost$.estimate, sum_cm_svm$.estimate)
+wyniki_test <- as.data.frame(matrix(sapply(wyniki_test, round, 2), byrow = F, ncol = 4))
+colnames(wyniki_test) <- c("rf", "imputowany rf", "xgboost", "svm")
+rownames(wyniki_test) <- sum_cm$.metric
+wyniki_test %>% gt(rownames_to_stub = T)
+```
+
+Na podstawie wyników możemy stwierdzić, że najlepiej dopasował się model lasu losowego na imputowanym zbiorze. Wszystkie podane w @tbl-wyniki metryki są dla niego najwyższe. XGBoost i SVM wypadły gorzej, natomiast lepiej niż pierwotny model lasu.
+
+Warto również zaznaczyć, że przez małą liczebność obserwacji, wyniki nie są stabilne - zmiana jądra generatora może je kompletnie zmienić.
+
+# Źródła
+
+-   [Zbiór danych](https://archive.ics.uci.edu/dataset/354/gps+trajectories)
+
+### Wykorzystane biblioteki
+
+-   `rio`
+-   `doParallel`
+-   `tidyverse`
+-   `dplyr`
+-   `gt`
+-   `naniar`
+-   `tidymodels`
+-   `yardstick`
+-   `themis`
+-   `caret`
