@@ -37,6 +37,8 @@ Zbiór danych został zebrany na podstawie aplikacji Go!Track. Jest on dostępny
 
 ![](zdjęcia/go!track.png){fig-align="center" width="70%"}
 
+`id` - numer obserwacji
+
 `id_android` - numer identyfikacyjny urządzenia z którego pochodzą dane
 
 `speed` - średnia prędkość pojazdy w kilometrach na godzinę
